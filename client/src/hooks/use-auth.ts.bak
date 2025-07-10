@@ -1,0 +1,133 @@
+import React, { useEffect, useState, createContext, useContext } from "react";
+import { 
+  signInWithGoogle, 
+  signOut, 
+  onAuthStateChange, 
+  getIdToken 
+} from "@/lib/firebase";
+import type { User as FirebaseUser } from "firebase/auth";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+
+export type User = {
+  id: number;
+  email: string;
+  displayName: string | null;
+  photoURL: string | null;
+  firebaseUid: string;
+  role: string;
+};
+
+interface AuthContextType {
+  user: User | null;
+  firebaseUser: FirebaseUser | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
+  signIn: () => Promise<void>;
+  logout: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  firebaseUser: null,
+  isLoading: true,
+  isAuthenticated: false,
+  signIn: async () => {},
+  logout: async () => {},
+});
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const { toast } = useToast();
+
+  // Listen for auth state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChange(async (authUser) => {
+      setFirebaseUser(authUser);
+      
+      if (authUser) {
+        try {
+          const token = await getIdToken();
+          if (!token) {
+            setIsLoading(false);
+            return;
+          }
+          
+          // Register or login user with our backend
+          const response = await apiRequest('POST', '/api/auth/user', {
+            email: authUser.email,
+            displayName: authUser.displayName,
+            photoURL: authUser.photoURL,
+          });
+          
+          const userData = await response.json();
+          setUser(userData);
+        } catch (error) {
+          console.error("Error registering user with backend", error);
+          toast({
+            title: "Authentication Error",
+            description: "There was a problem authenticating with the server.",
+            variant: "destructive",
+          });
+        }
+      } else {
+        setUser(null);
+      }
+      
+      setIsLoading(false);
+    });
+    
+    return () => unsubscribe();
+  }, [toast]);
+
+  const signIn = async () => {
+    try {
+      setIsLoading(true);
+      await signInWithGoogle();
+    } catch (error) {
+      console.error("Error signing in", error);
+      toast({
+        title: "Sign In Error",
+        description: "There was a problem signing in with Google.",
+        variant: "destructive",
+      });
+      setIsLoading(false);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      setIsLoading(true);
+      await signOut();
+      setUser(null);
+    } catch (error) {
+      console.error("Error signing out", error);
+      toast({
+        title: "Sign Out Error",
+        description: "There was a problem signing out.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const contextValue: AuthContextType = {
+    user,
+    firebaseUser,
+    isLoading,
+    isAuthenticated: !!user,
+    signIn,
+    logout
+  };
+
+  return (
+    <AuthContext.Provider value={contextValue}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => useContext(AuthContext);
